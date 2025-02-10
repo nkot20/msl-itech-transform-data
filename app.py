@@ -14,7 +14,7 @@ def prepare_data_for_journal(df, journal_name):
     if journal_name == "AC2":
         df_filtered = df_filtered[df_filtered['accountgl'] != 440100]
 
-    # Génération du champ 'name' en fonction du journal
+    # Génération du champ 'name' en fopnction du journal
     if journal_name in ["AC2", "GESTIO"]:
         df_filtered.loc[:, 'name'] = "2500-" + df_filtered['docnumber'].astype(str).str.zfill(4)
     elif journal_name == "ODGEST":
@@ -38,8 +38,8 @@ def prepare_data_for_journal(df, journal_name):
     df_filtered['montant-gen'] = pd.to_numeric(df_filtered['montant-gen'], errors='coerce').fillna(0)
 
     # Conversion des dates en format sans heure
-    df_filtered['datedoc'] = pd.to_datetime(df_filtered['datedoc']).dt.date
-    df_filtered['duedate'] = pd.to_datetime(df_filtered['duedate']).dt.date
+    df_filtered['datedoc'] = pd.to_datetime(df_filtered['datedoc']).dt.strftime('%Y.%m.%d')
+    df_filtered['duedate'] = pd.to_datetime(df_filtered['duedate']).dt.strftime('%Y.%m.%d')
 
     # **Ajout de la colonne 'Référence' basée sur le comment-int du compte spécifique**
     if journal_name in ["GESTIO", "AC2"]:
