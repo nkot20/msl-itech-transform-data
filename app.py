@@ -8,12 +8,6 @@ from io import BytesIO
 def prepare_data_for_journal(df, journal_name):
     df_filtered = df[df['journal'] == journal_name].copy()
 
-    # Suppression des lignes en fonction du journal
-    if journal_name in ["VEN", "GESTIO"]:
-        df_filtered = df_filtered[df_filtered['accountgl'] != 400000]
-    if journal_name == "AC2":
-        df_filtered = df_filtered[df_filtered['accountgl'] != 440100]
-
     # Génération du champ 'name' en fopnction du journal
     if journal_name in ["AC2", "GESTIO"]:
         df_filtered.loc[:, 'name'] = "2500-" + df_filtered['docnumber'].astype(str).str.zfill(4)
@@ -42,16 +36,22 @@ def prepare_data_for_journal(df, journal_name):
     df_filtered['duedate'] = pd.to_datetime(df_filtered['duedate']).dt.strftime('%Y.%m.%d')
 
     # **Ajout de la colonne 'Référence' basée sur le comment-int du compte spécifique**
-    if journal_name in ["GESTIO", "AC2"]:
+    if journal_name in ["GESTIO", "AC2", "VEN"]:
         reference_account = 400000 if journal_name in ["VEN", "GESTIO"] else 440100
 
-        # Sélectionner la première valeur de 'comment-int' par 'account-id' pour éviter les doublons
-        reference_dict = df[df['accountgl'] == reference_account].groupby('account-id')['comment-int'].first().to_dict()
-
-        # Appliquer la référence si elle existe, sinon utiliser 'comment-int' de la ligne courante
-        df_filtered['Référence'] = df_filtered['account-id'].map(reference_dict).fillna(df_filtered['comment-int'])
+        # Récupérer `comment-int` pour chaque groupe (docnumber + account-id)
+        df_filtered['Référence'] = df_filtered.groupby(['docnumber', 'account-id'])['comment-int'].transform(
+            lambda x: x[df_filtered['accountgl'] == reference_account].iloc[0]
+            if (df_filtered['accountgl'] == reference_account).any() else x.iloc[0]
+        )
     else:
         df_filtered['Référence'] = df_filtered['comment-int']
+
+    # Suppression des lignes en fonction du journal
+    if journal_name in ["VEN", "GESTIO"]:
+        df_filtered = df_filtered[df_filtered['accountgl'] != 400000]
+    if journal_name == "AC2":
+        df_filtered = df_filtered[df_filtered['accountgl'] != 440100]
 
     # Cas spécifique pour les journaux VEN, AC2 et GESTIO
     if journal_name in ["VEN", "GESTIO"]:
@@ -120,6 +120,6 @@ if uploaded_file is not None:
     st.download_button(
         label="Télécharger le fichier transformé pour intégrer dans ODOO",
         data=output_buffer,
-        file_name="fichier_transformé.xlsx",
+        file_name="HMS_RESULT.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
