@@ -180,8 +180,16 @@ with tab2:
 
         df_extracted = extract_comments(df_source_2)
 
+        output = BytesIO()
+        df_extracted.to_excel(output, index=False, engine='openpyxl')
+        output.seek(0)
+        st.download_button("📥 Télécharger les commentaires extraits", data=output, file_name="Commentaires.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
         st.write("🔍 Aperçu des données extraites :")
         st.dataframe(df_extracted)
+
+
 
 # 🔵 Onglet 3 : Extraction avancée
 with tab3:
@@ -194,6 +202,13 @@ with tab3:
         df_source_3 = pd.read_excel(uploaded_file_3)
 
         df_advanced = extract_second_last_comment(df_source_3)
+
+        output = BytesIO()
+        df_advanced.to_excel(output, index=False, engine='openpyxl')
+        output.seek(0)
+
+        st.download_button("📥 Télécharger les données extraites", data=output, file_name="Extraction_Avancee.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.write("🔍 Aperçu des données extraites :")
         st.dataframe(df_advanced)
