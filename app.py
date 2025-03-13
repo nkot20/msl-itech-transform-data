@@ -163,7 +163,6 @@ tab1, tab2, tab3 = st.tabs([
     "📌 Extraction avancée"
 ])
 
-
 # 🟢 Onglet 1 : Transformation du fichier HMS vers ODOO
 with tab1:
     st.header("🚀 Transformation du fichier HMS vers ODOO")
@@ -172,7 +171,8 @@ with tab1:
     uploaded_file = st.file_uploader("📥 **Téléchargez le fichier source HMS (Excel)**", type=['xlsx'], key="file1")
 
     # 📂 Téléchargement du fichier de mise à jour des `partner_id`
-    uploaded_update_file = st.file_uploader("🔄 **Téléchargez le fichier de mise à jour des Partner ID**", type=['xlsx'], key="update_file")
+    uploaded_update_file = st.file_uploader("🔄 **Téléchargez le fichier de mise à jour des Partner ID**", type=['xlsx'],
+                                            key="update_file")
 
     if uploaded_file is not None:
         st.success("✅ **Fichier principal chargé avec succès !**")
@@ -180,19 +180,19 @@ with tab1:
 
         journals = df_source['journal'].unique()
         output_buffer = BytesIO()
-        all_transformed_data = []
+        transformed_data_dict = {}  # Dictionnaire pour stocker les DataFrames par feuille
 
         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
             for journal in journals:
                 st.write(f"🛠️ **Traitement du journal :** `{journal}`")
-                df_journal = prepare_data_for_journal(df_source, journal)  # 💡 L'algorithme d'origine est conservé ici
+                df_journal = prepare_data_for_journal(df_source, journal)  # ✅ **L'algorithme d'origine est conservé**
                 if not df_journal.empty:
                     df_journal.to_excel(writer, sheet_name=journal, index=False)
-                    all_transformed_data.append(df_journal)
+                    transformed_data_dict[journal] = df_journal  # Stocker chaque feuille
 
         output_buffer.seek(0)
 
-        # 📥 Téléchargement du fichier transformé sans mise à jour
+        # 📥 **Téléchargement du fichier transformé (sans mise à jour)**
         st.download_button(
             label="📥 **Télécharger le fichier transformé**",
             data=output_buffer,
@@ -201,8 +201,8 @@ with tab1:
         )
 
         # 📊 **Aperçu des premières lignes**
-        if all_transformed_data:
-            df_preview = pd.concat(all_transformed_data).head(20)
+        if transformed_data_dict:
+            df_preview = pd.concat(transformed_data_dict.values()).head(20)
             st.write("🔍 **Aperçu des données transformées :**")
             st.dataframe(df_preview)
 
@@ -214,20 +214,28 @@ with tab1:
             df_update = pd.read_excel(uploaded_update_file)
 
             if df_update.shape[1] != 2:
-                st.error("⚠️ **Le fichier de mise à jour doit contenir 2 colonnes : Ancien partner_id et Nouveau partner_id.**")
+                st.error(
+                    "⚠️ **Le fichier de mise à jour doit contenir 2 colonnes : Ancien partner_id et Nouveau partner_id.**")
             else:
                 update_dict = df_update.set_index(df_update.columns[0])[df_update.columns[1]].to_dict()
 
-                for df in all_transformed_data:
-                    if 'partner_id' in df.columns:
-                        df['partner_id'] = df['partner_id'].map(update_dict).fillna(df['partner_id'])
+                # Mise à jour du `partner_id` dans **toutes** les feuilles du fichier transformé
+                for journal, df in transformed_data_dict.items():
+                    if journal == "ODGEST" and "Écritures comptables/Partenaire" in df.columns:
+                        df["Écritures comptables/Partenaire"] = df["Écritures comptables/Partenaire"].map(
+                            update_dict).fillna(df["Écritures comptables/Partenaire"])
+                    elif "partner_id" in df.columns:
+                        df["partner_id"] = df["partner_id"].map(update_dict).fillna(df["partner_id"])
+
+                    transformed_data_dict[journal] = df  # Mise à jour du dictionnaire
 
                 output_buffer_updated = BytesIO()
                 with pd.ExcelWriter(output_buffer_updated, engine='openpyxl') as writer:
-                    for journal, df in zip(journals, all_transformed_data):
+                    for journal, df in transformed_data_dict.items():
                         df.to_excel(writer, sheet_name=journal, index=False)
                 output_buffer_updated.seek(0)
 
+                # 📥 **Télécharger le fichier transformé mis à jour**
                 st.download_button(
                     label="📥 **Télécharger le fichier transformé mis à jour**",
                     data=output_buffer_updated,
@@ -235,7 +243,8 @@ with tab1:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-                st.success("✅ **Mise à jour des Partner ID effectuée avec succès !**")
+                st.success(
+                    "✅ **Mise à jour des Partner ID effectuée avec succès sur toutes les feuilles, y compris ODGEST !**")
 
 
 # 🟠 Onglet 2 : Extraction des commentaires
