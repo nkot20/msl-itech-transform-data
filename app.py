@@ -153,29 +153,33 @@ def transform_hms_to_odoo(df_hms, df_destination):
 
     # Assurer que 'montant-gen' est bien un float
     df_filtered["montant-gen"] = df_filtered["montant-gen"].replace(",", ".", regex=True)
-    df_filtered["montant-gen"] = pd.to_numeric(df_filtered["montant-gen"], errors="coerce")
+    df_filtered["montant-gen"] = pd.to_numeric(df_filtered["montant-gen"], errors="coerce").fillna(0)
 
     # Trier les données par account-id et document number pour garantir l'ordre
     df_filtered.sort_values(by=["account-id", "docnumber"], inplace=True)
 
-    # Création d'un dictionnaire pour stocker les groupes
+    # Regroupement des données par `account-id` et `docnumber`
     grouped_data = df_filtered.groupby(["account-id", "docnumber"])
+
+    # Suivi des groupes existants
+    group_counters = {}
 
     for (account_id, doc_number), group in grouped_data:
         if account_id not in df_destination["x_studio_rf_wb"].values:
-            continue  # Si le account-id n'existe pas dans le fichier destination, on passe
+            continue  # Si l'account-id n'existe pas dans le fichier destination, on passe
 
-        # Trouver l'index de la ligne correspondante dans le fichier destination
+        # Trouver l'index de la ligne correspondante dans df_destination
         dest_index = df_destination[df_destination["x_studio_rf_wb"] == account_id].index[0]
 
-        # Vérifier combien de groupes existent déjà pour cet `account-id`
-        existing_groups = [col for col in df_destination.columns if col.startswith("x_studio_code_analytique")]
-        group_count = df_destination.loc[dest_index, existing_groups].notna().sum()
+        # Déterminer combien de groupes existent déjà pour cet `account-id`
+        if account_id not in group_counters:
+            group_counters[account_id] = 0
+        else:
+            group_counters[account_id] += 1
 
-        # Déterminer le suffixe en fonction du nombre de groupes existants
-        suffix = f"_{group_count}" if group_count > 0 else ""
+        suffix = f"_{group_counters[account_id]}" if group_counters[account_id] > 0 else ""
 
-        # Vérifier que les colonnes existent dans df_destination avant de les modifier
+        # Mettre à jour `x_studio_code_analytique` et `x_studio_adresse`
         analytical_col = f"x_studio_code_analytique{suffix}"
         address_col = f"x_studio_adresse{suffix}"
 
@@ -185,17 +189,32 @@ def transform_hms_to_odoo(df_hms, df_destination):
         if address_col in df_destination.columns:
             df_destination.at[dest_index, address_col] = str(extract_address(group.iloc[0]["comment-int"]))
 
-        # Parcourir les lignes du groupe et remplir les valeurs correspondantes
+        # 🟢 **Sélection dynamique du bon compte pour Loyer Actuel (Indexé)**
+        main_rent_account = None
+
+        if "VEN" in group["journal"].values:
+            main_rent_account = 700100 if 700100 in group["accountgl"].values else 700200
+        elif "AC2" in group["journal"].values:
+            main_rent_account = 600100 if 600100 in group["accountgl"].values else 600200
+
+        if main_rent_account is not None:
+            column_name = mapping_accounts[main_rent_account] + suffix
+            montant_value = group[group["accountgl"] == main_rent_account]["montant-gen"].sum()
+            if column_name in df_destination.columns:
+                df_destination.at[dest_index, column_name] = float(montant_value)
+
+        # Ajout des autres montants suivant le mapping
         for _, row in group.iterrows():
             account_gl = row["accountgl"]
             montant_gen = row["montant-gen"]
 
-            if account_gl in mapping_accounts:
+            if pd.notna(montant_gen) and montant_gen != 0 and account_gl in mapping_accounts:
                 column_name = mapping_accounts[account_gl] + suffix
-                if column_name in df_destination.columns:  # Vérifier que la colonne existe avant de modifier
-                    df_destination.at[dest_index, column_name] = float(montant_gen)  # 🔹 Conversion explicite en float
+                if column_name in df_destination.columns:
+                    df_destination.at[dest_index, column_name] = float(montant_gen)
 
     return df_destination
+
 
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
 st.title("📂 MSL-ITECH - Transformation de fichier Excel HMS")
