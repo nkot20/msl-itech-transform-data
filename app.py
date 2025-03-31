@@ -148,50 +148,43 @@ def extract_second_last_comment(df):
     return df_result
 
 
-def transform_hms_to_odoo(df_hms, df_destination):
+def transform_hms_to_odoo(df_hms, df_destination_template):
     df_filtered = df_hms[df_hms["journal"].isin(["VEN", "AC2"])].copy()
-
-    # Assurer que 'montant-gen' est bien un float
     df_filtered["montant-gen"] = df_filtered["montant-gen"].replace(",", ".", regex=True)
     df_filtered["montant-gen"] = pd.to_numeric(df_filtered["montant-gen"], errors="coerce").fillna(0)
-
-    # Trier les données par account-id et document number pour garantir l'ordre
     df_filtered.sort_values(by=["account-id", "docnumber"], inplace=True)
 
-    # Regroupement des données par `account-id` et `docnumber`
     grouped_data = df_filtered.groupby(["account-id", "docnumber"])
-
-    # Suivi des groupes existants
     group_counters = {}
+    df_unmatched = pd.DataFrame(columns=df_destination_template.columns)
 
     for (account_id, doc_number), group in grouped_data:
-        if account_id not in df_destination["x_studio_rf_wb"].values:
-            continue  # Si l'account-id n'existe pas dans le fichier destination, on passe
+        if account_id in df_destination_template["x_studio_rf_wb"].values:
+            dest_df = df_destination_template
+        else:
+            if account_id not in df_unmatched["x_studio_rf_wb"].values:
+                new_row = pd.Series("", index=df_unmatched.columns)
+                new_row["x_studio_rf_wb"] = account_id
+                df_unmatched = pd.concat([df_unmatched, pd.DataFrame([new_row])], ignore_index=True)
+            dest_df = df_unmatched
 
-        # Trouver l'index de la ligne correspondante dans df_destination
-        dest_index = df_destination[df_destination["x_studio_rf_wb"] == account_id].index[0]
+        dest_index = dest_df[dest_df["x_studio_rf_wb"] == account_id].index[0]
 
-        # Déterminer combien de groupes existent déjà pour cet `account-id`
         if account_id not in group_counters:
             group_counters[account_id] = 0
         else:
             group_counters[account_id] += 1
 
         suffix = f"_{group_counters[account_id]}" if group_counters[account_id] > 0 else ""
-
-        # Mettre à jour `x_studio_code_analytique` et `x_studio_adresse`
         analytical_col = f"x_studio_code_analytique{suffix}"
         address_col = f"x_studio_adresse{suffix}"
 
-        if analytical_col in df_destination.columns:
-            df_destination.at[dest_index, analytical_col] = str(extract_analytical_code(group.iloc[0]["comment-int"]))
+        if analytical_col in dest_df.columns:
+            dest_df.at[dest_index, analytical_col] = str(extract_analytical_code(group.iloc[0]["comment-int"]))
+        if address_col in dest_df.columns:
+            dest_df.at[dest_index, address_col] = str(extract_address(group.iloc[0]["comment-int"]))
 
-        if address_col in df_destination.columns:
-            df_destination.at[dest_index, address_col] = str(extract_address(group.iloc[0]["comment-int"]))
-
-        # 🟢 **Sélection dynamique du bon compte pour Loyer Actuel (Indexé)**
         main_rent_account = None
-
         if "VEN" in group["journal"].values:
             main_rent_account = 700100 if 700100 in group["accountgl"].values else 700200
         elif "AC2" in group["journal"].values:
@@ -200,20 +193,29 @@ def transform_hms_to_odoo(df_hms, df_destination):
         if main_rent_account is not None:
             column_name = mapping_accounts[main_rent_account] + suffix
             montant_value = group[group["accountgl"] == main_rent_account]["montant-gen"].sum()
-            if column_name in df_destination.columns:
-                df_destination.at[dest_index, column_name] = float(montant_value)
+            if column_name in dest_df.columns:
+                dest_df.at[dest_index, column_name] = float(montant_value)
 
-        # Ajout des autres montants suivant le mapping
         for _, row in group.iterrows():
             account_gl = row["accountgl"]
             montant_gen = row["montant-gen"]
-
             if pd.notna(montant_gen) and montant_gen != 0 and account_gl in mapping_accounts:
                 column_name = mapping_accounts[account_gl] + suffix
-                if column_name in df_destination.columns:
-                    df_destination.at[dest_index, column_name] = float(montant_gen)
+                if column_name in dest_df.columns:
+                    dest_df.at[dest_index, column_name] = float(montant_gen)
 
-    return df_destination
+    return df_destination_template, df_unmatched
+
+
+def generate_excel_with_two_sheets(df1, df2):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df1.to_excel(writer, sheet_name="Données transformées", index=False)
+        if not df2.empty:
+            df2.to_excel(writer, sheet_name="Non présents dans modèle", index=False)
+    output.seek(0)
+    return output
+
 
 
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
@@ -386,11 +388,9 @@ with tab3:
 
 with tab4:
     st.header("📂 Extraction vers Odoo")
-    uploaded_hms = st.file_uploader("📂 Téléchargez le fichier HMS (Excel)", type=["xlsx"], key="hms_file")
 
-    # Téléchargement du fichier destination (template)
-    uploaded_destination = st.file_uploader("📂 Téléchargez le fichier modèle de destination (Excel)", type=["xlsx"],
-                                            key="destination_file")
+    uploaded_hms = st.file_uploader("📂 Téléchargez le fichier HMS (Excel)", type=["xlsx"], key="hms_file")
+    uploaded_destination = st.file_uploader("📂 Téléchargez le fichier modèle de destination (Excel)", type=["xlsx"], key="destination_file")
 
     if uploaded_hms and uploaded_destination:
         st.success("✅ Fichiers chargés avec succès !")
@@ -398,15 +398,17 @@ with tab4:
         df_hms = pd.read_excel(uploaded_hms)
         df_destination = pd.read_excel(uploaded_destination)
 
-        df_transformed = transform_hms_to_odoo(df_hms, df_destination)
+        # Appel de la fonction de transformation
+        df_transformed, df_unmatched = transform_hms_to_odoo(df_hms, df_destination)
 
-        # Générer le fichier transformé
+        # Génération du fichier Excel avec deux feuilles
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_transformed.to_excel(writer, index=False)
+            df_transformed.to_excel(writer, sheet_name="Données transformées", index=False)
+            if not df_unmatched.empty:
+                df_unmatched.to_excel(writer, sheet_name="Non présents dans modèle", index=False)
         output.seek(0)
 
-        # Bouton de téléchargement
         st.download_button(
             label="📥 Télécharger le fichier transformé",
             data=output,
@@ -414,6 +416,10 @@ with tab4:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # Afficher un aperçu des données transformées
-        st.write("🔍 **Aperçu des données transformées :**")
-        st.dataframe(df_transformed.head(50))
+        # Aperçu des deux dataframes
+        st.write("🔍 **Aperçu : Données transformées (feuille 1)**")
+        st.dataframe(df_transformed.head(30))
+
+        if not df_unmatched.empty:
+            st.write("⚠️ **Aperçu : Nouveaux account-id non présents dans le modèle (feuille 2)**")
+            st.dataframe(df_unmatched.head(30))
