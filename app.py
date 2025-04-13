@@ -155,7 +155,6 @@ def transform_hms_to_odoo(df_hms, df_destination_template):
     df_filtered.sort_values(by=["account-id", "docnumber"], inplace=True)
 
     grouped_data = df_filtered.groupby(["account-id", "docnumber"])
-    group_counters = {}
     df_unmatched = pd.DataFrame(columns=df_destination_template.columns)
 
     for (account_id, doc_number), group in grouped_data:
@@ -170,12 +169,14 @@ def transform_hms_to_odoo(df_hms, df_destination_template):
 
         dest_index = dest_df[dest_df["x_studio_rf_wb"] == account_id].index[0]
 
-        if account_id not in group_counters:
-            group_counters[account_id] = 0
-        else:
-            group_counters[account_id] += 1
+        # Déterminer le prochain bloc vide pour ce compte
+        suffix = ""
+        for i in range(20):  # suppose max 20 blocs possibles
+            potential_col = f"x_studio_code_analytique" + (f"_{i}" if i > 0 else "")
+            if potential_col not in dest_df.columns or pd.isna(dest_df.at[dest_index, potential_col]) or dest_df.at[dest_index, potential_col] == "":
+                suffix = f"_{i}" if i > 0 else ""
+                break
 
-        suffix = f"_{group_counters[account_id]}" if group_counters[account_id] > 0 else ""
         analytical_col = f"x_studio_code_analytique{suffix}"
         address_col = f"x_studio_adresse{suffix}"
 
@@ -206,7 +207,6 @@ def transform_hms_to_odoo(df_hms, df_destination_template):
 
     return df_destination_template, df_unmatched
 
-
 def generate_excel_with_two_sheets(df1, df2):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -216,6 +216,27 @@ def generate_excel_with_two_sheets(df1, df2):
     output.seek(0)
     return output
 
+def extract_missing_partner_ids(df_update, transformed_data_dict):
+    """
+    Compare les anciens partner_id du fichier de mise à jour avec ceux présents
+    dans les feuilles transformées. Retourne les lignes absentes.
+    """
+    # 1. Extraire tous les partner_id déjà présents dans les résultats transformés
+    all_present_ids = set()
+    for journal, df in transformed_data_dict.items():
+        if journal == "ODGEST" and "Écritures comptables/Partenaire" in df.columns:
+            all_present_ids.update(df["Écritures comptables/Partenaire"].dropna().astype(str).unique())
+        elif "partner_id" in df.columns:
+            all_present_ids.update(df["partner_id"].dropna().astype(str).unique())
+
+    # 2. S'assurer que df_update a les bonnes colonnes
+    df_update.columns = ["ancien", "nouveau"]
+    df_update = df_update.astype(str)
+
+    # 3. Filtrer ceux qui ne sont pas présents
+    missing_rows = df_update[~df_update["ancien"].isin(all_present_ids)]
+
+    return missing_rows
 
 
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
@@ -277,7 +298,6 @@ with tab1:
 
         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:
             for journal in journals:
-                st.write(f"🛠️ **Traitement du journal :** `{journal}`")
                 df_journal = prepare_data_for_journal(df_source, journal)  # ✅ **L'algorithme d'origine est conservé**
                 if not df_journal.empty:
                     df_journal.to_excel(writer, sheet_name=journal, index=False)
@@ -339,6 +359,37 @@ with tab1:
                 st.success(
                     "✅ **Mise à jour des Partner ID effectuée avec succès sur toutes les feuilles, y compris ODGEST !**")
 
+                # 🔍 Extraction des partner_id absents après mise à jour
+                df_missing_partners = extract_missing_partner_ids(df_update, transformed_data_dict)
+
+                if not df_missing_partners.empty:
+                    st.warning(
+                        "⚠️ Certains `partner_id` du fichier de mise à jour sont absents dans le fichier transformé.")
+
+                    # 📄 Réécriture du fichier avec la feuille MISSING_IDS
+                    output_buffer_with_missing = BytesIO()
+                    with pd.ExcelWriter(output_buffer_with_missing, engine='openpyxl') as writer:
+                        # Réécriture de toutes les feuilles transformées
+                        for journal, df in transformed_data_dict.items():
+                            df.to_excel(writer, sheet_name=journal, index=False)
+                        # Ajout des ids manquants
+                        df_missing_partners.to_excel(writer, sheet_name="MISSING_IDS", index=False)
+                    output_buffer_with_missing.seek(0)
+
+                    # 📥 Bouton de téléchargement avec la feuille MISSING_IDS
+                    st.download_button(
+                        label="📥 Télécharger le fichier final avec les partner_id manquants",
+                        data=output_buffer_with_missing,
+                        file_name="HMS_RESULT_UPDATED_WITH_MISSING.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+                    # 👁️ Affichage des partner_id manquants
+                    st.subheader("📋 Partner ID absents dans les feuilles transformées :")
+                    st.dataframe(df_missing_partners)
+                else:
+                    st.success(
+                        "✅ Tous les `partner_id` du fichier de mise à jour sont présents dans le fichier transformé.")
 
 # 🟠 Onglet 2 : Extraction des commentaires
 with tab2:
