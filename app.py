@@ -169,22 +169,37 @@ def transform_hms_to_odoo(df_hms, df_destination_template):
 
         dest_index = dest_df[dest_df["x_studio_rf_wb"] == account_id].index[0]
 
-        # Déterminer le prochain bloc vide pour ce compte
+        # Adresse actuelle à écrire
+        current_analytical = str(extract_analytical_code(group.iloc[0]["comment-int"]))
+        current_address = str(extract_address(group.iloc[0]["comment-int"]))
+
         suffix = ""
-        for i in range(20):  # suppose max 20 blocs possibles
-            potential_col = f"x_studio_code_analytique" + (f"_{i}" if i > 0 else "")
-            if potential_col not in dest_df.columns or pd.isna(dest_df.at[dest_index, potential_col]) or dest_df.at[dest_index, potential_col] == "":
-                suffix = f"_{i}" if i > 0 else ""
+        found_existing_block = False
+        for i in range(20):
+            suffix_try = f"_{i}" if i > 0 else ""
+            analytical_col = f"x_studio_code_analytique{suffix_try}"
+            address_col = f"x_studio_adresse{suffix_try}"
+
+            current_block_analytical = dest_df.at[dest_index, analytical_col] if analytical_col in dest_df.columns else ""
+            current_block_address = dest_df.at[dest_index, address_col] if address_col in dest_df.columns else ""
+
+            if (current_block_analytical == current_analytical and current_block_address == current_address):
+                suffix = suffix_try
+                found_existing_block = True
+                break
+            elif (pd.isna(current_block_analytical) or current_block_analytical == "") and (pd.isna(current_block_address) or current_block_address == ""):
+                suffix = suffix_try
+                if analytical_col in dest_df.columns:
+                    dest_df.at[dest_index, analytical_col] = current_analytical
+                if address_col in dest_df.columns:
+                    dest_df.at[dest_index, address_col] = current_address
+                found_existing_block = True
                 break
 
-        analytical_col = f"x_studio_code_analytique{suffix}"
-        address_col = f"x_studio_adresse{suffix}"
+        if not found_existing_block:
+            continue  # Par sécurité, éviter d'écrire dans un bloc non trouvé
 
-        if analytical_col in dest_df.columns:
-            dest_df.at[dest_index, analytical_col] = str(extract_analytical_code(group.iloc[0]["comment-int"]))
-        if address_col in dest_df.columns:
-            dest_df.at[dest_index, address_col] = str(extract_address(group.iloc[0]["comment-int"]))
-
+        # Ajout montant principal
         main_rent_account = None
         if "VEN" in group["journal"].values:
             main_rent_account = 700100 if 700100 in group["accountgl"].values else 700200
