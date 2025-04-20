@@ -238,6 +238,30 @@ def extract_missing_partner_ids(df_update, transformed_data_dict):
 
     return missing_rows
 
+def extract_ids_missing_from_update(df_update, transformed_data_dict):
+    """
+    Compare les partner_id présents dans les feuilles transformées avec ceux du fichier de mise à jour.
+    Retourne les partner_id absents dans le fichier de mise à jour avec le nom de la feuille d'origine.
+    """
+    df_update.columns = ["ancien", "nouveau"]
+    update_ids = set(df_update["ancien"].astype(str))
+
+    missing_records = []
+
+    for journal, df in transformed_data_dict.items():
+        if journal == "ODGEST" and "Écritures comptables/Partenaire" in df.columns:
+            present_ids = df["Écritures comptables/Partenaire"].dropna().astype(str).unique()
+        elif journal in ["VEN", "AC2", "GESTIO"] and "partner_id" in df.columns:
+            present_ids = df["partner_id"].dropna().astype(str).unique()
+        else:
+            continue
+
+        for pid in present_ids:
+            if pid not in update_ids:
+                missing_records.append({"partner_id": pid, "feuille": journal})
+
+    df_missing_ids = pd.DataFrame(missing_records)
+    return df_missing_ids
 
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
 st.title("📂 MSL-ITECH - Transformation de fichier Excel HMS")
@@ -360,7 +384,7 @@ with tab1:
                     "✅ **Mise à jour des Partner ID effectuée avec succès sur toutes les feuilles, y compris ODGEST !**")
 
                 # 🔍 Extraction des partner_id absents après mise à jour
-                df_missing_partners = extract_missing_partner_ids(df_update, transformed_data_dict)
+                df_missing_partners = extract_ids_missing_from_update(df_update, transformed_data_dict)
 
                 if not df_missing_partners.empty:
                     st.warning(
