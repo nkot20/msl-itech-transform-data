@@ -258,8 +258,8 @@ def extract_ids_missing_from_update(df_update, transformed_data_dict):
     Compare les partner_id présents dans les feuilles transformées avec ceux du fichier de mise à jour.
     Retourne les partner_id absents dans le fichier de mise à jour avec le nom de la feuille d'origine.
     """
-    df_update.columns = ["ancien", "nouveau"]
-    update_ids = set(df_update["ancien"].astype(str))
+    df_update.columns = ["Réf WB", "Nom"]
+    update_ids = set(df_update["Nom"].astype(str))
 
     missing_records = []
 
