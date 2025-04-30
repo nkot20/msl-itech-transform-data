@@ -183,7 +183,7 @@ def transform_hms_to_odoo(df_hms, df_destination_template):
             current_block_analytical = dest_df.at[dest_index, analytical_col] if analytical_col in dest_df.columns else ""
             current_block_address = dest_df.at[dest_index, address_col] if address_col in dest_df.columns else ""
 
-            if (current_block_analytical == current_analytical and current_block_address == current_address):
+            if (current_block_analytical == current_analytical):
                 suffix = suffix_try
                 found_existing_block = True
                 break
