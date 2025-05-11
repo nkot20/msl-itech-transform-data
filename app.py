@@ -278,6 +278,45 @@ def extract_ids_missing_from_update(df_update, transformed_data_dict):
     df_missing_ids = pd.DataFrame(missing_records)
     return df_missing_ids
 
+
+def clean_balance_preserving_structure(file):
+    """
+    Étape 1 : conserve les 3 premières lignes (index 0 à 2),
+    puis filtre à partir de la ligne 4 (index 3) toutes les lignes où la colonne A (col 0) est vide.
+    Aucun header n’est appliqué.
+    """
+    df_all = pd.read_excel(file, header=None, dtype=str)
+
+    # Lignes d'entête (à conserver telles quelles)
+    top_rows = df_all.iloc[:4]
+    # Lignes de données à partir de la ligne 4 (index 3)
+    data_rows = df_all.iloc[3:]
+    # Supprimer la ligne d'index 1
+    # Ne conserver que les lignes où la première colonne n’est pas vide
+    filtered_rows = data_rows[data_rows[0].notna() & (data_rows[0].astype(str).str.strip() != "")]
+
+    # 🔁 Mise à jour dynamique du nom "Solde" pour y inclure l'année (ex. "Solde 2024")
+    col_index = 2  # 3e colonne
+    if str(df_all.iloc[2, col_index]).strip() == "Solde":
+        year_value = str(df_all.iloc[0, col_index]).strip()
+        if year_value.isdigit():
+            df_all.iat[2, col_index] = f"Solde {year_value}"
+
+            # 🟨 Ajout automatique des colonnes après "Solde XXXX"
+            colonnes_a_ajouter = ["%", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+                                  "septembre", "octobre", "novembre", "décembre", "Total"]
+
+            for idx, col_name in enumerate(colonnes_a_ajouter, start=1):
+                df_all.insert(col_index + idx, col_index + idx, "")
+                df_all.iat[2, col_index + idx] = col_name
+
+    print(filtered_rows)
+    # Recombiner le tout (2 premières lignes + entête modifiée + données nettoyées)
+    df_result = pd.concat([df_all.iloc[:2], df_all.iloc[[2]], filtered_rows], ignore_index=True)
+
+    return df_result
+
+
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
 st.title("📂 MSL-ITECH - Transformation de fichier Excel HMS")
 
@@ -309,11 +348,12 @@ st.markdown("""
 
 
 # 🌟 Création des onglets
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🚀 Transformation du fichier HMS",
     "🔄 Extraction des commentaires",
     "📌 Extraction avancée",
-    "📂 Transformation vers le format Odoo"
+    "📂 Transformation vers le format Odoo",
+    "📘 Nettoyage d'un fichier de balance comptable"
 ])
 
 # 🟢 Onglet 1 : Transformation du fichier HMS vers ODOO
@@ -513,3 +553,36 @@ with tab4:
         if not df_unmatched.empty:
             st.write("⚠️ **Aperçu : Nouveaux account-id non présents dans le modèle (feuille 2)**")
             st.dataframe(df_unmatched.head(30))
+
+with tab5:
+    st.header("📘 Nettoyage d'un fichier de balance comptable")
+
+    uploaded_balance_file = st.file_uploader(
+        "📥 Téléchargez le fichier Excel de balance (l'en-tête est sur la 3e ligne)",
+        type=["xlsx"],
+        key="balance_file"
+    )
+
+    if uploaded_balance_file:
+        try:
+            df_cleaned_balance = clean_balance_preserving_structure(uploaded_balance_file)
+
+            # Aperçu
+            st.write("🔍 **Aperçu des données après nettoyage :**")
+            st.dataframe(df_cleaned_balance.head(30))
+
+            # Téléchargement du fichier nettoyé
+            output_balance = BytesIO()
+            with pd.ExcelWriter(output_balance, engine="openpyxl") as writer:
+                df_cleaned_balance.to_excel(writer, sheet_name="Balance Nettoyée", index=False)
+            output_balance.seek(0)
+
+            st.download_button(
+                label="📥 Télécharger le fichier nettoyé",
+                data=output_balance,
+                file_name="balance_nettoyee.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        except Exception as e:
+            st.error(f"❌ Erreur lors du traitement du fichier : {e}")
