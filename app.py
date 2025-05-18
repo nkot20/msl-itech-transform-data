@@ -285,24 +285,26 @@ def clean_balance_preserving_structure(file):
     puis filtre à partir de la ligne 4 (index 3) toutes les lignes où la colonne A (col 0) est vide.
     Aucun header n’est appliqué.
     """
+    import pandas as pd
+    from openpyxl import load_workbook
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Alignment
+    import tempfile
+
     df_all = pd.read_excel(file, header=None, dtype=str)
 
     # Lignes d'entête (à conserver telles quelles)
     top_rows = df_all.iloc[:4]
-    # Lignes de données à partir de la ligne 4 (index 3)
     data_rows = df_all.iloc[3:]
-    # Supprimer la ligne d'index 1
-    # Ne conserver que les lignes où la première colonne n’est pas vide
     filtered_rows = data_rows[data_rows[0].notna() & (data_rows[0].astype(str).str.strip() != "")]
 
-    # 🔁 Mise à jour dynamique du nom "Solde" pour y inclure l'année (ex. "Solde 2024")
     col_index = 2  # 3e colonne
+    budget_label = None
     if str(df_all.iloc[2, col_index]).strip() == "Solde":
         year_value = str(df_all.iloc[0, col_index]).strip()
         if year_value.isdigit():
             df_all.iat[2, col_index] = f"Solde {year_value}"
 
-            # 🟨 Ajout automatique des colonnes après "Solde XXXX"
             colonnes_a_ajouter = ["%", "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
                                   "septembre", "octobre", "novembre", "décembre", "Total"]
 
@@ -310,12 +312,68 @@ def clean_balance_preserving_structure(file):
                 df_all.insert(col_index + idx, col_index + idx, "")
                 df_all.iat[2, col_index + idx] = col_name
 
-    print(filtered_rows)
-    # Recombiner le tout (2 premières lignes + entête modifiée + données nettoyées)
-    df_result = pd.concat([df_all.iloc[:2], df_all.iloc[[2]], filtered_rows], ignore_index=True)
+            budget_label = f"Budget {int(year_value) + 1}"
+            for i in range(3, 17):
+                df_all.iat[1, i] = ""
+            df_all.iat[1, 3] = budget_label
 
+            # Enregistrer temporairement avec openpyxl pour fusions et style
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                path = tmp.name
+            df_all.to_excel(path, index=False, header=False)
+
+            wb = load_workbook(path)
+            ws = wb.active
+            ws.merge_cells(start_row=2, start_column=4, end_row=3, end_column=16)
+            cell = ws.cell(row=2, column=4)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            # 🔢 Mettre toutes les cellules de la colonne % (col 4) à 102% à partir de la ligne 5
+            for row in range(5, ws.max_row + 1):
+                ws.cell(row=row, column=4, value="102%")
+
+            wb.save(path)
+            df_final = pd.read_excel(path, header=None, dtype=str)
+
+            return df_final
+
+    df_result = pd.concat([df_all.iloc[:2], df_all.iloc[[2]], filtered_rows], ignore_index=True)
     return df_result
 
+def generate_budget_file(uploaded_file):
+    """
+    Génère un fichier budget Odoo depuis un fichier Excel issu du nettoyage,
+    selon le format spécifié (name, id, item_ids/...)
+    """
+    df = pd.read_excel(uploaded_file, header=None, dtype=str)
+
+    # Valeur pour colonne 'name' : E1
+    name_value = str(df.iloc[0, 4])  # E1
+    c1_value = str(df.iloc[0, 2])    # C1
+
+    # Détection de la ligne d'entête réelle (ligne contenant 'Code')
+    header_row_idx = df[df.eq("Code").any(axis=1)].index[0]
+    headers = df.iloc[header_row_idx].tolist()
+
+    # Extraction des données à partir de la ligne après l'entête
+    df_data = df.iloc[header_row_idx + 1:].copy()
+    df_data.columns = headers
+
+    # Nettoyage : supprimer lignes vides ou sans code
+    df_data = df_data[df_data["Code"].notna() & (df_data["Code"].astype(str).str.strip() != "")]
+
+    # Génération des lignes Odoo
+    result = []
+    for i, row in enumerate(df_data.itertuples(), start=1):
+        result.append({
+            "name": name_value if i == 1 else "",
+            "id": f"budget_{c1_value}_00001" if i == 1 else "",
+            "item_ids/id": f"lignes_budget_{c1_value}{i}",
+            "item_ids/account_id": str(row.Code),
+            "item_ids/amount": str(float(row.janvier) * -1 if "janvier" in row._fields and pd.notna(row.janvier) else 0)
+        })
+
+    return pd.DataFrame(result)
 
 # ======= INTERFACE UTILISATEUR STREAMLIT =======
 st.title("📂 MSL-ITECH - Transformation de fichier Excel HMS")
@@ -586,3 +644,36 @@ with tab5:
 
         except Exception as e:
             st.error(f"❌ Erreur lors du traitement du fichier : {e}")
+
+    st.markdown("---")
+    st.subheader("🧾 Générer un fichier de budget Odoo à partir du fichier nettoyé")
+
+    uploaded_budget_source = st.file_uploader(
+        "📥 Téléchargez le fichier Excel nettoyé pour générer le fichier Odoo (avec colonnes janvier + code)",
+        type=["xlsx"],
+        key="budget_file"
+    )
+
+    if uploaded_budget_source:
+        try:
+            df_budget = generate_budget_file(uploaded_budget_source)
+
+            st.write("🔍 **Aperçu du fichier budget généré :**")
+            st.dataframe(df_budget.head(30))
+
+            output_budget = BytesIO()
+            with pd.ExcelWriter(output_budget, engine="openpyxl") as writer:
+                df_budget.to_excel(writer, sheet_name="Budget Odoo", index=False)
+            output_budget.seek(0)
+
+            st.download_button(
+                label="📥 Télécharger le fichier budget Odoo",
+                data=output_budget,
+                file_name="budget_odoo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        except Exception as e:
+            st.error(f"❌ Erreur lors de la génération du fichier budget : {e}")
+
+
