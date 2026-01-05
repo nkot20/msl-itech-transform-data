@@ -32,7 +32,7 @@ def prepare_data_for_journal(df, journal_name):
 
     # Génération du champ 'name' en fopnction du journal
     if journal_name in ["AC2", "GESTIO"]:
-        df_filtered.loc[:, 'name'] = "2500-" + df_filtered['docnumber'].astype(str).str.zfill(4)
+        df_filtered.loc[:, 'name'] = df_filtered['datedoc'].dt.year.astype(str).str[-2:] + "00-" + df_filtered['docnumber'].astype(str).str.zfill(4)
     elif journal_name == "ODGEST":
         df_filtered['datedoc'] = pd.to_datetime(df_filtered['datedoc'])
         df_filtered['name'] = (
