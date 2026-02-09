@@ -1,4 +1,5 @@
 pandas
 numpy
 openpyxl
-streamlit
+streamlit==1.41.1
+altair==5.5.0
